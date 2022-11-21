@@ -1,0 +1,135 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Data;
+using System.Data.SqlClient;
+using System.Data.SqlTypes;
+using System.IO;
+using System.Runtime.Serialization.Formatters.Binary;
+using Microsoft.SqlServer.Server;
+
+
+[Serializable]
+[Microsoft.SqlServer.Server.SqlUserDefinedAggregate(
+  Format.UserDefined,
+  IsInvariantToOrder = true,
+  IsInvariantToNulls = true,
+  IsInvariantToDuplicates = true,
+  MaxByteSize = -1
+  )]
+public struct MedianAgr : IBinarySerialize
+{
+    private Dictionary<double, int> _accumulator;
+
+    public Boolean IsNull { get; private set; }
+
+    public void Init()
+    {
+        _accumulator = new Dictionary<double, int>();
+        this.IsNull = true;
+    }
+
+    public void Accumulate(System.Data.SqlTypes.SqlDouble sqlInputValue)
+    {
+        // if value is null, return if skipNulls is true
+        if (sqlInputValue.IsNull)
+            return;
+        
+        if (!_accumulator.ContainsKey(sqlInputValue.Value))
+        {
+            _accumulator.Add(sqlInputValue.Value, 1);
+
+        }
+        else
+        {
+            _accumulator[sqlInputValue.Value] = (_accumulator[sqlInputValue.Value] + 1);
+        }
+
+        this.IsNull = false;
+    }
+
+    public void Merge(MedianAgr Group)
+    {
+        foreach (var key in Group._accumulator.Keys)
+        {
+            if (!_accumulator.ContainsKey(key))
+            {
+                _accumulator.Add(key, Group._accumulator[key]);
+            }
+            else
+            {
+
+                _accumulator[key] = (Group._accumulator[key] + _accumulator[key]);
+            }
+        }
+
+    }
+
+    public SqlDouble Terminate()
+    {
+        // Put your code here
+        List<KeyValuePair<double, int>> dict = new List<KeyValuePair<double, int>>(); ;
+        int sumCount = 0;       
+
+        foreach (double key in _accumulator.Keys)
+        {
+            KeyValuePair<double, int> kVp = new KeyValuePair<double, int>(key, _accumulator[key]);
+            dict.Add(kVp);
+
+            sumCount += _accumulator[key];
+        }        
+
+        dict.Sort((pair1, pair2) => pair1.Key.CompareTo(pair2.Key));
+
+        int sumMedian = 0;
+        for (int i = 0; i < dict.Count; i++)
+        {
+            sumMedian += dict[i].Value;
+            if (sumMedian > sumCount / 2.0)
+            {
+                return new SqlDouble(dict[i].Key);
+            }
+            else if (sumMedian == sumCount / 2.0)
+            {
+                return new SqlDouble((dict[i].Key + dict[i + 1].Key) / 2.0);
+            }
+        }
+
+        return SqlDouble.Null;
+    }
+
+    void IBinarySerialize.Read(System.IO.BinaryReader r)
+    {
+        int numOfKeys = r.ReadInt32();
+
+        Dictionary<double, int> tmp = new Dictionary<double, int>();
+        for (int i = 0; i < numOfKeys; i++)
+        {
+            tmp.Add(r.ReadDouble(), r.ReadInt32());
+        }
+
+        _accumulator = tmp;
+
+        if (_accumulator.Keys.Count > 0)
+        {
+            this.IsNull = false;
+        }
+    }
+
+    void IBinarySerialize.Write(BinaryWriter w)  //(System.IO.BinaryWriter w)
+    {
+        w.Write(_accumulator.Keys.Count);
+
+        foreach (double key in _accumulator.Keys)
+        {
+            w.Write(key);
+            w.Write(_accumulator[key]);
+        }
+
+        //w.Write(_accumulator2);
+
+    }
+
+    // This is a place-holder member field
+    // public int _var1;
+}
